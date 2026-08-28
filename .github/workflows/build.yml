@@ -10,48 +10,24 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install packages
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential gcc-11 g++-11 flex bison \
-            libssl-dev libelf-dev bc python3 git \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
-            device-tree-compiler libncurses-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential gcc-11 g++-11 flex bison libssl-dev libelf-dev bc python3 git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf device-tree-compiler libncurses-dev
 
-      - name: Patch scripts and stub missing Kconfig
-        run: |
-          sed -i 's/print "error, forbidden warning:", m.group(2)/print("error, forbidden warning:", m.group(2))/' scripts/gcc-wrapper.py
-          python3 -c "import re,pathlib; root=pathlib.Path('.');
-for p in root.rglob('Kconfig*'):
- t=p.read_text(errors='replace')
- t=re.sub(r'(?m)^[ \t]*#ifn?def.*\n','',t)
- t=re.sub(r'(?m)^[ \t]*#if .*\n','',t)
- t=re.sub(r'(?m)^[ \t]*#else.*\n','',t)
- t=re.sub(r'(?m)^[ \t]*#endif.*\n','',t)
- p.write_text(t)
-for p in root.rglob('Kconfig*'):
- t=p.read_text(errors='replace')
- for m in re.finditer(r'source\s+\"([^\"]+)\"', t):
-  q=pathlib.Path(m.group(1))
-  if not q.exists():
-   q.parent.mkdir(parents=True, exist_ok=True)
-   q.write_text('# stub\n')
-   print('stubbed', q)
-"
-          mkdir -p kernel/sched_assist
-          echo '# stub' > kernel/sched_assist/Kconfig
-          echo patched-ok
+      - name: Patch python2 print
+        run: sed -i 's/print "error, forbidden warning:", m.group(2)/print("error, forbidden warning:", m.group(2))/' scripts/gcc-wrapper.py
+
+      - name: Stub sched_assist
+        run: mkdir -p kernel/sched_assist && echo stub > kernel/sched_assist/Kconfig
 
       - name: Integrate ReSukiSU
-        run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+        run: curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
       - name: Defconfig
         run: |
           set -o pipefail
           mkdir -p out
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- HOSTCC=gcc-11 vendor/bengal-perf_defconfig 2>&1 | tee defconfig.log
-          echo 'CONFIG_KSU=y' >> out/.config
-          echo 'CONFIG_KSU_MANUAL_HOOK=y' >> out/.config
+          echo CONFIG_KSU=y >> out/.config
+          echo CONFIG_KSU_MANUAL_HOOK=y >> out/.config
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- HOSTCC=gcc-11 olddefconfig 2>&1 | tee -a defconfig.log
 
       - name: Build
