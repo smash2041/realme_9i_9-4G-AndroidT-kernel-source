@@ -12,35 +12,48 @@ jobs:
       - name: Install packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc-11 g++-11 flex bison \
+          sudo apt-get install -y build-essential gcc-11 g++-11 2to3 flex bison \
             libssl-dev libelf-dev bc python3 git clang lld llvm \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
             device-tree-compiler libncurses-dev
 
-      - name: Stock defconfig
+      - name: Fix Python2 + missing Oplus Kconfig
         run: |
-          mkdir -p out
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            HOSTCC=gcc-11 vendor/bengal-perf_defconfig 2>&1 | tee stock-defconfig.log
+          set -e
+          2to3 -w -n scripts/gcc-wrapper.py || true
+          python3 - << 'PY'
+          from pathlib import Path
+          p = Path("scripts/gcc-wrapper.py")
+          t = p.read_text(errors="replace")
+          t = t.replace('print "error, forbidden warning:", m.group(2)',
+                        'print("error, forbidden warning:", m.group(2))')
+          t = t.replace("print \"error, forbidden warning:\", m.group(2)",
+                        "print(\"error, forbidden warning:\", m.group(2))")
+          p.write_text(t)
+          PY
+          mkdir -p kernel/sched_assist
+          echo "# stub for incomplete OEM dump" > kernel/sched_assist/Kconfig
 
       - name: Integrate ReSukiSU
-        if: success()
         run: |
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
-      - name: KSU defconfig
-        if: success()
+      - name: Defconfig
         run: |
+          set -o pipefail
+          mkdir -p out
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            HOSTCC=gcc-11 vendor/bengal-perf_defconfig 2>&1 | tee defconfig.log
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> out/.config
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            HOSTCC=gcc-11 olddefconfig 2>&1 | tee ksu-defconfig.log
+            HOSTCC=gcc-11 olddefconfig 2>&1 | tee -a defconfig.log
 
       - name: Build
-        if: success()
         run: |
+          set -o pipefail
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            HOSTCC=gcc-11 CC=clang LD=ld.lld -j$(nproc)
+            HOSTCC=gcc-11 -j$(nproc) 2>&1 | tee build.log
 
       - name: Upload logs and Image
         if: always()
@@ -48,8 +61,8 @@ jobs:
         with:
           name: kernel-out
           path: |
-            stock-defconfig.log
-            ksu-defconfig.log
+            defconfig.log
+            build.log
             out/.config
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
