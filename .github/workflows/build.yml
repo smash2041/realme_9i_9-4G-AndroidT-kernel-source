@@ -1,0 +1,41 @@
+name: ksu-9i
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libssl-dev libelf-dev bc python3 git \
+            clang lld llvm gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf \
+            device-tree-compiler
+
+      - name: Integrate ReSukiSU
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+
+      - name: Defconfig
+        run: |
+          mkdir -p out
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- vendor/bengal-perf_defconfig
+          ./scripts/config --file out/.config --enable KSU --enable KPROBES --enable KALLSYMS --enable KALLSYMS_ALL
+
+      - name: Build
+        run: |
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang LD=ld.lld -j$(nproc)
+
+      - name: Upload Image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-out
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+          if-no-files-found: warn
