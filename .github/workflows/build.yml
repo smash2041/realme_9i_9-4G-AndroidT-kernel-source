@@ -10,16 +10,31 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install packages
-        run: sudo apt-get update && sudo apt-get install -y build-essential gcc-11 g++-11 flex bison libssl-dev libelf-dev bc python3 git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf device-tree-compiler libncurses-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-11 g++-11 flex bison libssl-dev libelf-dev bc python3 git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf device-tree-compiler libncurses-dev
 
       - name: Patch python2 print
-        run: sed -i 's/print "error, forbidden warning:", m.group(2)/print("error, forbidden warning:", m.group(2))/' scripts/gcc-wrapper.py
+        run: |
+          sed -i 's/print "error, forbidden warning:", m.group(2)/print("error, forbidden warning:", m.group(2))/' scripts/gcc-wrapper.py
 
-      - name: Stub sched_assist
-        run: mkdir -p kernel/sched_assist && echo stub > kernel/sched_assist/Kconfig
+      - name: Fix broken Oplus links
+        run: |
+          find . -type l | while read -r l; do
+            if [ ! -e "$l" ]; then
+              echo "BROKEN $l"
+              rm -f "$l"
+              mkdir -p "$l"
+            fi
+          done
+          rm -f kernel/sched_assist
+          mkdir -p kernel/sched_assist
+          echo stub > kernel/sched_assist/Kconfig
+          ls -la kernel/sched_assist
 
       - name: Integrate ReSukiSU
-        run: curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
       - name: Defconfig
         run: |
