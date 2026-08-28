@@ -77,6 +77,98 @@ jobs:
         print("symlink_total", ns)
         print("kconfig_total", nk)
 
+      HOOK_PY: |
+        from pathlib import Path
+
+        def inject(path, marker, needle, payload):
+            p = Path(path)
+            t = p.read_text(errors="replace")
+            if marker in t:
+                print("skip", path, marker)
+                return True
+            i = t.find(needle)
+            if i < 0:
+                print("FAIL needle", path, needle[:70])
+                return False
+            b = t.find("{", i)
+            if b < 0:
+                print("FAIL brace", path)
+                return False
+            t = t[: b + 1] + payload + t[b + 1 :]
+            p.write_text(t)
+            print("ok", path, marker)
+            return True
+
+        ok = True
+        ok &= inject(
+            "fs/exec.c",
+            "ksu_handle_execveat",
+            "static int do_execveat_common(",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n"
+            "\t  ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "fs/open.c",
+            "ksu_handle_faccessat",
+            "SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n"
+            "\t  ksu_handle_faccessat(&dfd, &filename, &mode, 0); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "fs/read_write.c",
+            "ksu_handle_sys_read",
+            "ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_sys_read(char __user **buf_ptr, size_t *count_ptr);\n"
+            "\t  ksu_handle_sys_read(&buf, &count); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "fs/stat.c",
+            "ksu_handle_stat",
+            "SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);\n"
+            "\t  extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);\n"
+            "\t  extern void ksu_handle_fstat64_ret(unsigned long *fd, void *statbuf_ptr);\n"
+            "\t  ksu_handle_stat(&dfd, &filename, &flag); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "kernel/sys.c",
+            "ksu_handle_setresuid",
+            "SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);\n"
+            "\t  ksu_handle_setresuid(ruid, euid, suid); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "drivers/input/input.c",
+            "ksu_handle_input_handle_event",
+            "static void input_handle_event(struct input_dev *dev,",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);\n"
+            "\t  ksu_handle_input_handle_event(&type, &code, &value); }\n"
+            "#endif\n",
+        )
+        ok &= inject(
+            "kernel/reboot.c",
+            "ksu_handle_sys_reboot",
+            "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,",
+            "\n#ifdef CONFIG_KSU_MANUAL_HOOK\n"
+            "\t{ extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
+            "\t  ksu_handle_sys_reboot(magic1, magic2, cmd, &arg); }\n"
+            "#endif\n",
+        )
+        if not ok:
+            raise SystemExit("hook inject failed")
+        print("hooks-ok")
+
     steps:
       - uses: actions/checkout@v4
 
@@ -95,6 +187,17 @@ jobs:
         run: |
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           python3 -c "import os; exec(os.environ['STUB_PY'])"
+
+      - name: Apply manual syscall hooks
+        run: |
+          python3 -c "import os; exec(os.environ['HOOK_PY'])"
+          grep -n ksu_handle_execveat fs/exec.c | head
+          grep -n ksu_handle_faccessat fs/open.c | head
+          grep -n ksu_handle_sys_read fs/read_write.c | head
+          grep -n ksu_handle_stat fs/stat.c | head
+          grep -n ksu_handle_setresuid kernel/sys.c | head
+          grep -n ksu_handle_input_handle_event drivers/input/input.c | head
+          grep -n ksu_handle_sys_reboot kernel/reboot.c | head
 
       - name: Defconfig
         run: |
