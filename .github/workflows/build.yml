@@ -6,6 +6,77 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      STUB_PY: |
+        import os, re
+        from pathlib import Path
+
+        def stub_broken_symlinks():
+            n = 0
+            for dirpath, dirnames, filenames in os.walk("."):
+                if "/.git" in dirpath.replace("\\", "/") or dirpath.startswith("./.git"):
+                    continue
+                for name in list(dirnames) + list(filenames):
+                    p = Path(dirpath) / name
+                    try:
+                        if not p.is_symlink():
+                            continue
+                        if p.exists():
+                            continue
+                    except OSError:
+                        pass
+                    try:
+                        target = os.readlink(p)
+                    except OSError:
+                        continue
+                    p.unlink()
+                    is_file = p.suffix in {".c", ".h", ".S", ".s", ".dts", ".dtsi"} or str(target).endswith((".c", ".h", ".S", ".s"))
+                    if is_file:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        if p.suffix == ".h":
+                            g = p.name.upper().replace(".", "_").replace("-", "_")
+                            p.write_text("#ifndef %s\n#define %s\n#endif\n" % (g, g))
+                        else:
+                            p.write_text("/* stub */\n")
+                    else:
+                        p.mkdir(parents=True, exist_ok=True)
+                        (p / "Kconfig").write_text("# stub\n")
+                        (p / "Makefile").write_text("# stub\n")
+                    n += 1
+                    print("symlink-stub", p)
+            return n
+
+        def stub_missing_kconfig_sources():
+            total = 0
+            for _ in range(8):
+                added = 0
+                for p in Path(".").rglob("Kconfig*"):
+                    if ".git" in str(p):
+                        continue
+                    try:
+                        t = p.read_text(errors="replace")
+                    except Exception:
+                        continue
+                    for m in re.finditer(r'source\s+"([^"]+)"', t):
+                        rel = m.group(1)
+                        if "$" in rel:
+                            continue
+                        q = Path(rel)
+                        if not q.exists():
+                            q.parent.mkdir(parents=True, exist_ok=True)
+                            q.write_text("# stub\n")
+                            added += 1
+                            print("kconfig-stub", q)
+                total += added
+                if added == 0:
+                    break
+            return total
+
+        ns = stub_broken_symlinks()
+        nk = stub_missing_kconfig_sources()
+        print("symlink_total", ns)
+        print("kconfig_total", nk)
+
     steps:
       - uses: actions/checkout@v4
 
@@ -14,18 +85,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gcc-11 g++-11 flex bison libssl-dev libelf-dev bc python3 git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf device-tree-compiler libncurses-dev
 
-      - name: Fix python wrapper and stub 76 missing OEM files
+      - name: Fix wrapper and stub OEM holes
         run: |
           printf '%s\n' '#!/usr/bin/env python3' 'import os,sys' 'os.execvp(sys.argv[1], sys.argv[1:])' > scripts/gcc-wrapper.py
           chmod +x scripts/gcc-wrapper.py
-          echo aW1wb3J0IG9zCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aApuID0gMApmb3IgZGlycGF0aCwgZGlybmFtZXMsIGZpbGVuYW1lcyBpbiBvcy53YWxrKCIuIik6CiAgICBpZiAiLy5naXQiIGluIGRpcnBhdGgucmVwbGFjZSgiXFwiLCAiLyIpIG9yIGRpcnBhdGguc3RhcnRzd2l0aCgiLi8uZ2l0Iik6CiAgICAgICAgY29udGludWUKICAgIGZvciBuYW1lIGluIGxpc3QoZGlybmFtZXMpICsgbGlzdChmaWxlbmFtZXMpOgogICAgICAgIHAgPSBQYXRoKGRpcnBhdGgpIC8gbmFtZQogICAgICAgIHRyeToKICAgICAgICAgICAgaWYgbm90IHAuaXNfc3ltbGluaygpOgogICAgICAgICAgICAgICAgY29udGludWUKICAgICAgICAgICAgaWYgcC5leGlzdHMoKToKICAgICAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgZXhjZXB0IE9TRXJyb3I6CiAgICAgICAgICAgIHBhc3MKICAgICAgICB0cnk6CiAgICAgICAgICAgIHRhcmdldCA9IG9zLnJlYWRsaW5rKHApCiAgICAgICAgZXhjZXB0IE9TRXJyb3I6CiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgcC51bmxpbmsoKQogICAgICAgIGlzX2ZpbGUgPSBwLnN1ZmZpeCBpbiB7Ii5jIiwgIi5oIiwgIi5TIiwgIi5zIiwgIi5kdHMiLCAiLmR0c2kifSBvciBzdHIodGFyZ2V0KS5lbmRzd2l0aCgoIi5jIiwgIi5oIiwgIi5TIiwgIi5zIikpCiAgICAgICAgaWYgaXNfZmlsZToKICAgICAgICAgICAgcC5wYXJlbnQubWtkaXIocGFyZW50cz1UcnVlLCBleGlzdF9vaz1UcnVlKQogICAgICAgICAgICBpZiBwLnN1ZmZpeCA9PSAiLmgiOgogICAgICAgICAgICAgICAgZyA9IHAubmFtZS51cHBlcigpLnJlcGxhY2UoIi4iLCAiXyIpLnJlcGxhY2UoIi0iLCAiXyIpCiAgICAgICAgICAgICAgICBwLndyaXRlX3RleHQoIiNpZm5kZWYgJXNcbiNkZWZpbmUgJXNcbiNlbmRpZlxuIiAlIChnLCBnKSkKICAgICAgICAgICAgZWxzZToKICAgICAgICAgICAgICAgIHAud3JpdGVfdGV4dCgiLyogc3R1YiAqL1xuIikKICAgICAgICBlbHNlOgogICAgICAgICAgICBwLm1rZGlyKHBhcmVudHM9VHJ1ZSwgZXhpc3Rfb2s9VHJ1ZSkKICAgICAgICAgICAgKHAgLyAiS2NvbmZpZyIpLndyaXRlX3RleHQoIiMgc3R1YlxuIikKICAgICAgICAgICAgKHAgLyAiTWFrZWZpbGUiKS53cml0ZV90ZXh0KCIjIHN0dWJcbiIpCiAgICAgICAgbiArPSAxCiAgICAgICAgcHJpbnQoInN0dWJiZWQiLCBwKQpwcmludCgidG90YWwiLCBuKQo= | base64 -d > /tmp/stub_oem.py
-          python3 /tmp/stub_oem.py
-          mkdir -p kernel/sched_assist
-          echo stub > kernel/sched_assist/Kconfig
+          python3 -c "import os; exec(os.environ['STUB_PY'])"
 
       - name: Integrate ReSukiSU
         run: |
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          python3 -c "import os; exec(os.environ['STUB_PY'])"
 
       - name: Defconfig
         run: |
