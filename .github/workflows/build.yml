@@ -72,10 +72,67 @@ jobs:
                     break
             return total
 
+        def write_hdr(q):
+            q.parent.mkdir(parents=True, exist_ok=True)
+            g = re.sub(r"[^A-Z0-9]", "_", q.name.upper())
+            q.write_text("#ifndef _STUB_%s\n#define _STUB_%s\n#endif\n" % (g, g))
+            print("hdr-stub", q)
+
+        def stub_missing_headers():
+            inc_re = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.M)
+            keys = ("sched_assist", "healthinfo", "iomonitor", "oplus", "oppo", "special_opt", "seccomp_types", "lowmem_dbg", "kevent", "nandswap")
+            n = 0
+            seen = set()
+            for p in Path(".").rglob("*"):
+                if p.suffix not in {".c", ".h", ".S"}:
+                    continue
+                if ".git" in str(p):
+                    continue
+                try:
+                    t = p.read_text(errors="replace")
+                except Exception:
+                    continue
+                for m in inc_re.finditer(t):
+                    rel = m.group(1)
+                    if "$" in rel or rel.startswith("asm/"):
+                        continue
+                    local = p.parent / rel
+                    inc = Path("include") / rel
+                    if local.exists() or inc.exists() or Path(rel).exists():
+                        continue
+                    if not any(k in rel or k in str(p) for k in keys):
+                        if not (rel.startswith("linux/") and "seccomp" in rel):
+                            continue
+                    q = inc if (rel.startswith(("linux/", "soc/", "net/", "uapi/")) or rel.endswith(".h") and "/" in rel) else local
+                    if not any(k in str(q) or k in rel for k in keys) and "seccomp" not in rel:
+                        q = inc
+                    key = str(q)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    write_hdr(q)
+                    n += 1
+            for extra in [
+                "include/linux/seccomp_types.h",
+                "include/linux/sched_assist/sched_assist_mutex.h",
+                "include/linux/sched_assist/sched_assist_common.h",
+                "include/linux/sched_assist/sched_assist_fork.h",
+                "include/linux/sched_assist/sched_assist_rwsem.h",
+                "include/linux/sched_assist/sched_assist_slide.h",
+                "include/linux/sched_assist/sched_assist_binder.h",
+            ]:
+                q = Path(extra)
+                if not q.exists():
+                    write_hdr(q)
+                    n += 1
+            return n
+
         ns = stub_broken_symlinks()
         nk = stub_missing_kconfig_sources()
+        nh = stub_missing_headers()
         print("symlink_total", ns)
         print("kconfig_total", nk)
+        print("header_total", nh)
 
       HOOK_PY: |
         from pathlib import Path
@@ -191,13 +248,6 @@ jobs:
       - name: Apply manual syscall hooks
         run: |
           python3 -c "import os; exec(os.environ['HOOK_PY'])"
-          grep -n ksu_handle_execveat fs/exec.c | head
-          grep -n ksu_handle_faccessat fs/open.c | head
-          grep -n ksu_handle_sys_read fs/read_write.c | head
-          grep -n ksu_handle_stat fs/stat.c | head
-          grep -n ksu_handle_setresuid kernel/sys.c | head
-          grep -n ksu_handle_input_handle_event drivers/input/input.c | head
-          grep -n ksu_handle_sys_reboot kernel/reboot.c | head
 
       - name: Defconfig
         run: |
